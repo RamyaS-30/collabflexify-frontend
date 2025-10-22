@@ -58,7 +58,7 @@ useEffect(() => {
     if (!docId || !isReady) return;
 
     const provider = new WebsocketProvider(
-      `ws://collabflexify-y-websocket-server.onrender.com/${docId}?workspaceId=${workspaceId}`,
+      `wss://collabflexify-y-websocket-server.onrender.com/${docId}?workspaceId=${workspaceId}`,
       docId,
       ydoc
     );
