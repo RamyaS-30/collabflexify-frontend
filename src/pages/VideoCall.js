@@ -258,7 +258,7 @@ const VideoCall = ({ workspaceId, user }) => {
           if (sender) sender.replaceTrack(screenStream.getVideoTracks()[0]);
         });
 
-        // Show screen stream locally
+        // Show screen stream locally (audio from mic + screen video)
         if (userVideo.current) {
           const combinedStream = new MediaStream([
             ...streamRef.current.getAudioTracks(),
@@ -267,13 +267,14 @@ const VideoCall = ({ workspaceId, user }) => {
           userVideo.current.srcObject = combinedStream;
         }
 
+        // When screen sharing ends
         screenStream.getVideoTracks()[0].onended = () => {
           stopScreenSharing();
         };
 
       } catch (err) {
         console.error('Screen sharing failed:', err);
-        alert('Failed to share screen');
+        alert('Failed to share screen. Make sure you allow permission and your browser supports it.');
       }
     } else {
       stopScreenSharing();
@@ -290,83 +291,113 @@ const VideoCall = ({ workspaceId, user }) => {
       if (sender) sender.replaceTrack(videoTrack);
     });
 
-    if (userVideo.current) {
-      userVideo.current.srcObject = streamRef.current;
-    }
-
     if (screenStreamRef.current) {
       screenStreamRef.current.getTracks().forEach(track => track.stop());
       screenStreamRef.current = null;
+    }
+
+    if (userVideo.current) {
+      userVideo.current.srcObject = streamRef.current;
     }
 
     setScreenSharing(false);
   };
 
   const isFirstUser = () => {
-    const totalMembers = members.some(m => m.socketId === socketRef.current?.id)
-      ? members.length
-      : members.length + 1;
-    return totalMembers === 1 && !callInProgress;
+    // First user means only 1 member connected (self)
+    return members.length === 1 && members[0].socketId === socketRef.current.id;
   };
 
   const canEndCall = () => {
-    return socketRef.current?.id === callStartedBy;
+    // Any joined user can end call when in progress
+    return hasJoinedCall && callInProgress;
+  };
+
+  // Start call by first user
+  const startCall = () => {
+    setCallActive(true);
+    setCallInProgress(true);
+    setCallStartedBy(socketRef.current.id);
+    setHasJoinedCall(true);
+    socketRef.current.emit('videoCall:start', { workspaceId, startedBy: socketRef.current.id });
+  };
+
+  // End call by any user joined
+  const endCall = () => {
+    socketRef.current.emit('videoCall:end', { workspaceId });
+    setCallActive(false);
+    setCallInProgress(false);
+    setHasJoinedCall(false);
+    setCallStartedBy(null);
+
+    peersRef.current.forEach(({ peer }) => peer.destroy());
+    peersRef.current = [];
+    setPeers([]);
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach(track => track.stop());
+      screenStreamRef.current = null;
+    }
+
+    setCamEnabled(true);
+    setMicEnabled(true);
+    setScreenSharing(false);
   };
 
   return (
-    <div className="video-call-wrapper flex flex-col md:flex-row gap-6 p-6 bg-gray-50 rounded-lg shadow max-w-7xl mx-auto min-h-[400px]">
-
-      {/* Members panel */}
-      <aside className="members-column w-full md:w-60 bg-white border border-gray-200 rounded-lg p-5 shadow-md flex flex-col">
-        <h3 className="text-xl font-semibold mb-5 border-b border-gray-200 pb-3 text-gray-800">Members</h3>
-        <ul className="space-y-3 flex-grow overflow-y-auto">
-          <li key="me" className="flex items-center space-x-3 font-semibold text-blue-700">
-            <UserAvatar name={user.username || user.email} />
-            <span>{user.username || user.email}</span>
-            <span className="text-sm text-gray-400">(You)</span>
-          </li>
-          {members
-            .filter(m => m.socketId !== socketRef.current?.id)
-            .map(({ socketId, userName }) => (
-              <li key={socketId} className="flex items-center space-x-3 text-gray-700 hover:bg-gray-100 rounded p-1 transition">
-                <UserAvatar name={userName} />
-                <span>{userName}</span>
-              </li>
-            ))}
-        </ul>
-      </aside>
-
-      {/* Video & controls section */}
-      <section className="video-area flex-1 flex flex-col gap-4">
-
-        {!callInProgress && !callActive && isFirstUser() ? (
-          <div className="flex flex-col items-center justify-center w-full h-96 md:h-auto bg-white rounded-lg shadow p-10 text-center space-y-6">
-            <h2 className="text-4xl font-extrabold text-indigo-700">Welcome to Your Video Call</h2>
-            <p className="text-lg text-gray-600 max-w-md">
-              No active call detected. As the first member, you can start the call when you’re ready.
-            </p>
-            <button disabled={!socketConnected}
-              className="px-10 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed"
-              onClick={() => {
-                socketRef.current.emit('videoCall:start', { workspaceId });
-                setCallActive(true);
-                setHasJoinedCall(true);
-                setCallStartedBy(socketRef.current.id);
-              }}
-            >
-              Start Call
-            </button>
-          </div>
-        ) : !callInProgress && !callActive && !isFirstUser() ? (
-          <div className="flex flex-col items-center justify-center w-full h-96 md:h-auto bg-white rounded-lg shadow p-10 text-center space-y-6">
-            <h2 className="text-4xl font-extrabold text-gray-700">No Active Call</h2>
-            <p className="text-lg text-gray-600 max-w-md">
-              Please wait for the call to start.
-            </p>
-          </div>
-        ) : (
-          <div className="flex flex-col gap-4">
-            <div className="local-video-wrapper w-full max-h-[360px] rounded-lg overflow-hidden shadow-lg bg-black relative">
+    <div className="flex flex-col w-full max-w-screen-xl mx-auto space-y-4 p-4">
+      {/* Buttons UI based on call state and user */}
+      {!callInProgress && !callActive && isFirstUser() ? (
+        // First user starts call
+        <div className="flex flex-col items-center justify-center w-full h-96 md:h-auto bg-white rounded-lg shadow p-10 text-center space-y-6">
+          <h2 className="text-4xl font-extrabold text-gray-700">Start Call</h2>
+          <p className="text-lg text-gray-600 max-w-md">
+            Click below to start a video call for this workspace.
+          </p>
+          <button
+            disabled={!socketConnected}
+            className="px-10 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={startCall}
+          >
+            Start Call
+          </button>
+        </div>
+      ) : callInProgress && !hasJoinedCall ? (
+        // Call in progress, others can join
+        <div className="flex flex-col items-center justify-center w-full h-96 md:h-auto bg-white rounded-lg shadow p-10 text-center space-y-6">
+          <h2 className="text-4xl font-extrabold text-gray-700">Call in Progress</h2>
+          <p className="text-lg text-gray-600 max-w-md">
+            A call is already in progress. Click below to join.
+          </p>
+          <button
+            disabled={!socketConnected}
+            className="px-10 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={() => {
+              setCallActive(true);
+              setHasJoinedCall(true);
+            }}
+          >
+            Join Call
+          </button>
+        </div>
+      ) : !callInProgress && !callActive && !isFirstUser() ? (
+        // No active call and user not first - wait
+        <div className="flex flex-col items-center justify-center w-full h-96 md:h-auto bg-white rounded-lg shadow p-10 text-center space-y-6">
+          <h2 className="text-4xl font-extrabold text-gray-700">No Active Call</h2>
+          <p className="text-lg text-gray-600 max-w-md">
+            Please wait for the call to start.
+          </p>
+        </div>
+      ) : (
+        // Call is active and joined, show video call UI
+        <div className="flex flex-col w-full rounded-lg shadow-lg bg-white p-4 space-y-4">
+          <div className="flex flex-wrap justify-center space-x-4 space-y-4">
+            {/* Local video */}
+            <div className="relative w-48 h-36 bg-black rounded-md overflow-hidden">
               <video
                 ref={userVideo}
                 autoPlay
@@ -374,81 +405,87 @@ const VideoCall = ({ workspaceId, user }) => {
                 playsInline
                 className="w-full h-full object-cover"
               />
+              <div className="absolute bottom-1 left-1 bg-black bg-opacity-50 rounded px-2 py-1 text-white text-sm flex items-center space-x-2">
+                <span>{user.username || user.email || 'You'}</span>
+                <FontAwesomeIcon
+                  icon={camEnabled ? faVideo : faVideoSlash}
+                  className={`ml-2 ${camEnabled ? 'text-green-400' : 'text-red-400'}`}
+                />
+                <FontAwesomeIcon
+                  icon={micEnabled ? faMicrophone : faMicrophoneSlash}
+                  className={`ml-1 ${micEnabled ? 'text-green-400' : 'text-red-400'}`}
+                />
+                {screenSharing && (
+                  <FontAwesomeIcon
+                    icon={faDesktop}
+                    className="ml-2 text-blue-400"
+                    title="Screen Sharing"
+                  />
+                )}
+              </div>
             </div>
-            <div className="remote-videos grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 overflow-auto max-h-[500px]">
-              {peers.map(({ peerID, peer }) => (
-                <Video key={peerID} peer={peer} />
-              ))}
-            </div>
 
-            <div className="controls flex items-center space-x-5 mt-4">
-              <button
-                onClick={toggleCamera}
-                title={camEnabled ? 'Turn Camera Off' : 'Turn Camera On'}
-                className={`rounded-full p-3 transition ${
-                  camEnabled ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-gray-700 text-white hover:bg-gray-600'
-                }`}
-              >
-                <FontAwesomeIcon icon={camEnabled ? faVideo : faVideoSlash} size="lg" />
-              </button>
-
-              <button
-                onClick={toggleMic}
-                title={micEnabled ? 'Mute Microphone' : 'Unmute Microphone'}
-                className={`rounded-full p-3 transition ${
-                  micEnabled ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-gray-700 text-white hover:bg-gray-600'
-                }`}
-              >
-                <FontAwesomeIcon icon={micEnabled ? faMicrophone : faMicrophoneSlash} size="lg" />
-              </button>
-
-              <button
-                onClick={toggleScreenSharing}
-                title={screenSharing ? 'Stop Screen Sharing' : 'Start Screen Sharing'}
-                className={`rounded-full p-3 transition ${
-                  screenSharing ? 'bg-blue-600 text-white hover:bg-blue-500' : 'bg-gray-700 text-white hover:bg-gray-600'
-                }`}
-              >
-                <FontAwesomeIcon icon={faDesktop} size="lg" />
-              </button>
-
-              {canEndCall() && (
-                <button
-                  onClick={() => {
-                    socketRef.current.emit('videoCall:end', { workspaceId });
-                    setCallActive(false);
-                    setCallInProgress(false);
-                    setHasJoinedCall(false);
-                    setPeers([]);
-                    peersRef.current.forEach(({ peer }) => peer.destroy());
-                    peersRef.current = [];
-                    if (streamRef.current) {
-                      streamRef.current.getTracks().forEach(track => track.stop());
-                      streamRef.current = null;
-                    }
-                    if (screenStreamRef.current) {
-                      screenStreamRef.current.getTracks().forEach(track => track.stop());
-                      screenStreamRef.current = null;
-                    }
-                    setCamEnabled(true);
-                    setMicEnabled(true);
-                    setScreenSharing(false);
-                    setCallStartedBy(null);
-                  }}
-                  className="ml-auto bg-red-600 hover:bg-red-700 text-white rounded-lg px-6 py-3 font-semibold transition"
-                >
-                  End Call
-                </button>
-              )}
-            </div>
+            {/* Remote peers */}
+            {peers.map(({ peerID, peer }) => (
+              <Video key={peerID} peer={peer} members={members} />
+            ))}
           </div>
-        )}
-      </section>
+
+          {callStartedBy && (
+    <div className="text-sm text-gray-500 mt-2 text-center">
+      Call started by: {members.find(m => m.socketId === callStartedBy)?.userName || 'Unknown'}
+    </div>
+  )}
+
+          {/* Controls */}
+          <div className="flex space-x-4 justify-center mt-4">
+            <button
+              onClick={toggleCamera}
+              className={`px-4 py-2 rounded-md font-semibold ${
+                camEnabled ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-400'
+              } text-white`}
+              title={camEnabled ? 'Turn off camera' : 'Turn on camera'}
+            >
+              <FontAwesomeIcon icon={camEnabled ? faVideo : faVideoSlash} />
+            </button>
+
+            <button
+              onClick={toggleMic}
+              className={`px-4 py-2 rounded-md font-semibold ${
+                micEnabled ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-400'
+              } text-white`}
+              title={micEnabled ? 'Mute microphone' : 'Unmute microphone'}
+            >
+              <FontAwesomeIcon icon={micEnabled ? faMicrophone : faMicrophoneSlash} />
+            </button>
+
+            <button
+              onClick={toggleScreenSharing}
+              className={`px-4 py-2 rounded-md font-semibold ${
+                screenSharing ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-500 hover:bg-gray-600'
+              } text-white`}
+              title={screenSharing ? 'Stop screen sharing' : 'Start screen sharing'}
+            >
+              <FontAwesomeIcon icon={faDesktop} />
+            </button>
+
+            {canEndCall() && (
+              <button
+                onClick={endCall}
+                className="ml-auto bg-red-600 hover:bg-red-700 text-white rounded-lg px-6 py-3 font-semibold transition"
+              >
+                End Call
+              </button>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-const Video = ({ peer }) => {
+// Separate Video component for remote peers
+const Video = ({ peer, members }) => {
   const ref = useRef();
 
   useEffect(() => {
@@ -457,39 +494,19 @@ const Video = ({ peer }) => {
         ref.current.srcObject = stream;
       }
     });
-
-    peer.on('error', (err) => {
-      console.error('Peer error:', err);
-    });
-
-    return () => {
-      peer.destroy();
-    };
   }, [peer]);
 
-  return (
-    <video
-      ref={ref}
-      autoPlay
-      playsInline
-      className="w-64 h-48 rounded-lg shadow-md object-cover bg-black"
-    />
-  );
-};
-
-const UserAvatar = ({ name }) => {
-  // Generate initials from name/email
-  const initials = name
-    ? name
-        .split(' ')
-        .map((n) => n[0])
-        .join('')
-        .toUpperCase()
-    : 'U';
+  // Find username by peerID (if you want)
+  // This depends on how you map peerID to members
+  // Here peerID = socketId of remote user
+  const userName = members.find(m => m.socketId === peer._id)?.userName || 'User';
 
   return (
-    <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center font-semibold">
-      {initials}
+    <div className="relative w-48 h-36 bg-black rounded-md overflow-hidden">
+      <video ref={ref} autoPlay playsInline className="w-full h-full object-cover" />
+      <div className="absolute bottom-1 left-1 bg-black bg-opacity-50 rounded px-2 py-1 text-white text-sm">
+        {userName}
+      </div>
     </div>
   );
 };
