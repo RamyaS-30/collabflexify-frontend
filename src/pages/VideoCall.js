@@ -34,7 +34,7 @@ const VideoCall = ({ workspaceId, user }) => {
 
   const username = user.username || user.email;
 
-  // --- Socket connection on mount ---
+  // --- Socket connection & listeners ---
   useEffect(() => {
     socketRef.current = io(SOCKET_SERVER_URL, {
       auth: {
@@ -51,9 +51,12 @@ const VideoCall = ({ workspaceId, user }) => {
       });
     });
 
-    socketRef.current.on('disconnect', () => {
-      setSocketConnected(false);
-      cleanupCall();
+    // Listen for call state for late joiners
+    socketRef.current.on('callState', ({ inProgress, startedBy }) => {
+      if (inProgress) {
+        setCallInProgress(true);
+        setCallStartedBy(startedBy);
+      }
     });
 
     socketRef.current.on('videoCall:started', ({ startedBy }) => {
@@ -65,29 +68,42 @@ const VideoCall = ({ workspaceId, user }) => {
       cleanupCall();
     });
 
+    socketRef.current.on('disconnect', () => {
+      setSocketConnected(false);
+      cleanupCall();
+    });
+
     socketRef.current.on('all-users', (users) => {
-      // Update members (including self)
       setMembers([{ socketId: socketRef.current.id, userName: username }, ...users]);
 
-      // Create peers for existing users except self
       if (streamRef.current) {
         const peersArr = [];
         users.forEach(({ socketId }) => {
           if (socketId === socketRef.current.id) return;
-          const peer = createPeer(socketId, socketRef.current.id, streamRef.current);
-          peersRef.current.push({ peerID: socketId, peer });
-          peersArr.push({ peerID: socketId, peer });
+          if (!peersRef.current.find(p => p.peerID === socketId)) {
+            const peerObj = createPeer(socketId, socketRef.current.id, streamRef.current);
+            peersRef.current.push({ peerID: socketId, peer: peerObj });
+            peersArr.push({ peerID: socketId, peer: peerObj });
+          }
         });
         setPeers(peersArr);
       }
     });
 
     socketRef.current.on('user-connected', ({ socketId, userName }) => {
-      setMembers((prev) => [...prev, { socketId, userName }]);
+      setMembers(prev => {
+        if (!prev.find(m => m.socketId === socketId)) {
+          return [...prev, { socketId, userName }];
+        }
+        return prev;
+      });
+
       if (streamRef.current) {
-        const peer = addPeer(socketId, streamRef.current);
-        peersRef.current.push({ peerID: socketId, peer });
-        setPeers((prevPeers) => [...prevPeers, { peerID: socketId, peer }]);
+        if (!peersRef.current.find(p => p.peerID === socketId)) {
+          const peerObj = addPeer(socketId, streamRef.current);
+          peersRef.current.push({ peerID: socketId, peer: peerObj });
+          setPeers(prev => [...prev, { peerID: socketId, peer: peerObj }]);
+        }
       }
     });
 
@@ -99,11 +115,11 @@ const VideoCall = ({ workspaceId, user }) => {
     });
 
     socketRef.current.on('user-disconnected', (id) => {
-      setMembers((prev) => prev.filter((m) => m.socketId !== id));
+      setMembers(prev => prev.filter(m => m.socketId !== id));
       const peerObj = peersRef.current.find(p => p.peerID === id);
       if (peerObj) peerObj.peer.destroy();
       peersRef.current = peersRef.current.filter(p => p.peerID !== id);
-      setPeers((prevPeers) => prevPeers.filter(p => p.peerID !== id));
+      setPeers(prev => prev.filter(p => p.peerID !== id));
     });
 
     return () => {
@@ -114,7 +130,7 @@ const VideoCall = ({ workspaceId, user }) => {
     };
   }, [workspaceId, username, user.id, user.userId, user.sub]);
 
-  // --- Setup user media when call is active or user joins ---
+  // --- Setup user media when callActive becomes true ---
   useEffect(() => {
     if (!callActive) return;
 
@@ -124,7 +140,6 @@ const VideoCall = ({ workspaceId, user }) => {
         if (userVideo.current) userVideo.current.srcObject = stream;
 
         setHasJoinedCall(true);
-
       })
       .catch((err) => {
         console.error('❌ Error accessing media devices:', err);
@@ -132,10 +147,8 @@ const VideoCall = ({ workspaceId, user }) => {
         setCallActive(false);
       });
 
-    return () => {
-      cleanupCall();
-    };
-  }, [callActive, workspaceId, username]);
+    // Note: we do NOT cleanupCall() in return here
+  }, [callActive]);
 
   const cleanupCall = () => {
     setCallInProgress(false);
@@ -172,10 +185,12 @@ const VideoCall = ({ workspaceId, user }) => {
       socketRef.current.emit('signal', { to: userToSignal, from: callerID, signal });
     });
 
+    peer.on('error', err => console.error('Peer error', err));
+
     return peer;
   };
 
-  const addPeer = (incomingSignalId, stream) => {
+  const addPeer = (incomingPeerID, stream) => {
     const peer = new SimplePeer({
       initiator: false,
       trickle: false,
@@ -183,8 +198,10 @@ const VideoCall = ({ workspaceId, user }) => {
     });
 
     peer.on('signal', signal => {
-      socketRef.current.emit('signal', { to: incomingSignalId, from: socketRef.current.id, signal });
+      socketRef.current.emit('signal', { to: incomingPeerID, from: socketRef.current.id, signal });
     });
+
+    peer.on('error', err => console.error('Peer error', err));
 
     return peer;
   };
@@ -268,16 +285,13 @@ const VideoCall = ({ workspaceId, user }) => {
     return hasJoinedCall;
   };
 
-  // Start call by first user
   const startCall = () => {
     setCallActive(true);
     setCallInProgress(true);
     setCallStartedBy(socketRef.current.id);
-    setHasJoinedCall(true);
     socketRef.current.emit('videoCall:start', { workspaceId, startedBy: socketRef.current.id });
   };
 
-  // End call by any user joined
   const endCall = () => {
     socketRef.current.emit('videoCall:end', { workspaceId });
     cleanupCall();
@@ -286,7 +300,6 @@ const VideoCall = ({ workspaceId, user }) => {
   return (
     <div className="flex flex-col w-full max-w-screen-xl mx-auto space-y-4 p-4">
       {!callInProgress && !callActive ? (
-        // Call not active - show start or join for everyone
         <div className="flex flex-col items-center justify-center w-full h-96 md:h-auto bg-white rounded-lg shadow p-10 text-center space-y-6">
           {isFirstUser() ? (
             <>
@@ -321,7 +334,6 @@ const VideoCall = ({ workspaceId, user }) => {
           )}
         </div>
       ) : !hasJoinedCall && callInProgress ? (
-        // Call active but user not joined yet
         <div className="flex flex-col items-center justify-center w-full h-96 md:h-auto bg-white rounded-lg shadow p-10 text-center space-y-6">
           <h2 className="text-4xl font-extrabold text-gray-700">Call in Progress</h2>
           <p className="text-lg text-gray-600 max-w-md">
@@ -338,10 +350,8 @@ const VideoCall = ({ workspaceId, user }) => {
           </button>
         </div>
       ) : (
-        // Call is active and joined, show video UI
         <div className="flex flex-col w-full rounded-lg shadow-lg bg-white p-4 space-y-4">
           <div className="flex flex-wrap justify-center space-x-4 space-y-4">
-            {/* Local video */}
             <div className="relative w-48 h-36 bg-black rounded-md overflow-hidden">
               <video
                 ref={userVideo}
@@ -370,7 +380,6 @@ const VideoCall = ({ workspaceId, user }) => {
               </div>
             </div>
 
-            {/* Remote peers */}
             {peers.map(({ peerID, peer }) => (
               <Video key={peerID} peer={peer} peerID={peerID} members={members} />
             ))}
@@ -382,13 +391,10 @@ const VideoCall = ({ workspaceId, user }) => {
             </div>
           )}
 
-          {/* Controls */}
           <div className="flex space-x-4 justify-center mt-4">
             <button
               onClick={toggleCamera}
-              className={`px-4 py-2 rounded-md font-semibold ${
-                camEnabled ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-400'
-              } text-white`}
+              className={`px-4 py-2 rounded-md font-semibold ${camEnabled ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-400'} text-white`}
               title={camEnabled ? 'Turn off camera' : 'Turn on camera'}
             >
               <FontAwesomeIcon icon={camEnabled ? faVideo : faVideoSlash} />
@@ -396,9 +402,7 @@ const VideoCall = ({ workspaceId, user }) => {
 
             <button
               onClick={toggleMic}
-              className={`px-4 py-2 rounded-md font-semibold ${
-                micEnabled ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-400'
-              } text-white`}
+              className={`px-4 py-2 rounded-md font-semibold ${micEnabled ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-400'} text-white`}
               title={micEnabled ? 'Mute microphone' : 'Unmute microphone'}
             >
               <FontAwesomeIcon icon={micEnabled ? faMicrophone : faMicrophoneSlash} />
@@ -406,9 +410,7 @@ const VideoCall = ({ workspaceId, user }) => {
 
             <button
               onClick={toggleScreenSharing}
-              className={`px-4 py-2 rounded-md font-semibold ${
-                screenSharing ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-500 hover:bg-gray-600'
-              } text-white`}
+              className={`px-4 py-2 rounded-md font-semibold ${screenSharing ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-500 hover:bg-gray-600'} text-white`}
               title={screenSharing ? 'Stop screen sharing' : 'Start screen sharing'}
             >
               <FontAwesomeIcon icon={faDesktop} />
@@ -430,7 +432,6 @@ const VideoCall = ({ workspaceId, user }) => {
   );
 };
 
-// Video component for remote peer video
 const Video = ({ peer, peerID, members }) => {
   const ref = useRef();
 
@@ -440,13 +441,13 @@ const Video = ({ peer, peerID, members }) => {
     });
   }, [peer]);
 
-  const username = members.find(m => m.socketId === peerID)?.userName || 'User';
+  const userName = members.find(m => m.socketId === peerID)?.userName || 'User';
 
   return (
     <div className="relative w-48 h-36 bg-black rounded-md overflow-hidden">
       <video ref={ref} autoPlay playsInline className="w-full h-full object-cover" />
       <div className="absolute bottom-1 left-1 bg-black bg-opacity-50 rounded px-2 py-1 text-white text-sm">
-        {username}
+        {userName}
       </div>
     </div>
   );
