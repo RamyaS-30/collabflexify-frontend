@@ -439,7 +439,7 @@ const VideoCall = ({ workspaceId, user }) => {
 };
 
 // Video component for remote peer video
-const Video = ({ peer, members }) => {
+const Video = ({ peer, peerID, members }) => {
   const ref = useRef();
 
   useEffect(() => {
@@ -448,7 +448,7 @@ const Video = ({ peer, members }) => {
     });
   }, [peer]);
 
-  const username = members.find(m => m.socketId === peer._id)?.userName || 'User';
+  const username = members.find(m => m.socketId === peerID)?.userName || 'User';
 
   return (
     <div className="relative w-48 h-36 bg-black rounded-md overflow-hidden">
