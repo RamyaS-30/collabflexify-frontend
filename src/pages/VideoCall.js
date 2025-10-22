@@ -32,6 +32,8 @@ const VideoCall = ({ workspaceId, user }) => {
   const [screenSharing, setScreenSharing] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
 
+  const username = user.username || user.email;
+
   // --- Socket connection on mount ---
   useEffect(() => {
     socketRef.current = io(SOCKET_SERVER_URL, {
@@ -42,81 +44,42 @@ const VideoCall = ({ workspaceId, user }) => {
 
     socketRef.current.on('connect', () => {
       setSocketConnected(true);
-      setMembers([{ socketId: socketRef.current.id, userName: user.username || user.email }]);
-      // Join room immediately
+      setMembers([{ socketId: socketRef.current.id, userName: username }]);
       socketRef.current.emit('joinRoom', {
         roomId: workspaceId,
-        userName: user.username || user.email,
+        userName: username,
       });
     });
 
     socketRef.current.on('disconnect', () => {
       setSocketConnected(false);
-      setMembers([]);
-      setPeers([]);
-      peersRef.current.forEach(({ peer }) => peer.destroy());
-      peersRef.current = [];
-      setCallActive(false);
-      setCallInProgress(false);
-      setHasJoinedCall(false);
-      setCallStartedBy(null);
-      setCamEnabled(true);
-      setMicEnabled(true);
-      setScreenSharing(false);
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach(track => track.stop());
-        screenStreamRef.current = null;
-      }
+      cleanupCall();
     });
 
-    // Video call event handlers that affect call state regardless of media
-    socketRef.current.on('videoCall:started', ({ startedBy, timestamp }) => {
+    socketRef.current.on('videoCall:started', ({ startedBy }) => {
       setCallInProgress(true);
       setCallStartedBy(startedBy);
     });
 
     socketRef.current.on('videoCall:ended', () => {
-      setCallInProgress(false);
-      setHasJoinedCall(false);
-      setCallActive(false);
-      // Clean up media and peers
-      peersRef.current.forEach(({ peer }) => peer.destroy());
-      peersRef.current = [];
-      setPeers([]);
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach(track => track.stop());
-        screenStreamRef.current = null;
-      }
-      setCamEnabled(true);
-      setMicEnabled(true);
-      setScreenSharing(false);
-      setCallStartedBy(null);
+      cleanupCall();
     });
 
-    // Handle all-users - update members and create peers
     socketRef.current.on('all-users', (users) => {
-      setMembers([
-        { socketId: socketRef.current.id, userName: user.username || user.email },
-        ...users,
-      ]);
+      // Update members (including self)
+      setMembers([{ socketId: socketRef.current.id, userName: username }, ...users]);
 
-      // Create peers for existing users
-      const peersArr = [];
-      users.forEach(({ socketId }) => {
-        const peer = createPeer(socketId, socketRef.current.id, streamRef.current);
-        peersRef.current.push({ peerID: socketId, peer });
-        peersArr.push({ peerID: socketId, peer });
-      });
-
-      setPeers(peersArr);
+      // Create peers for existing users except self
+      if (streamRef.current) {
+        const peersArr = [];
+        users.forEach(({ socketId }) => {
+          if (socketId === socketRef.current.id) return;
+          const peer = createPeer(socketId, socketRef.current.id, streamRef.current);
+          peersRef.current.push({ peerID: socketId, peer });
+          peersArr.push({ peerID: socketId, peer });
+        });
+        setPeers(peersArr);
+      }
     });
 
     socketRef.current.on('user-connected', ({ socketId, userName }) => {
@@ -149,9 +112,9 @@ const VideoCall = ({ workspaceId, user }) => {
         socketRef.current.disconnect();
       }
     };
-  }, [workspaceId, user]);
+  }, [workspaceId, username, user.id, user.userId, user.sub]);
 
-  // --- Media & Peer setup when callActive changes ---
+  // --- Setup user media when call is active or user joins ---
   useEffect(() => {
     if (!callActive) return;
 
@@ -160,18 +123,13 @@ const VideoCall = ({ workspaceId, user }) => {
         streamRef.current = stream;
         if (userVideo.current) userVideo.current.srcObject = stream;
 
-        // After media stream is ready, emit joinRoom again (if needed)
+        // Emit join room again to sync users and peers
         socketRef.current.emit('joinRoom', {
           roomId: workspaceId,
-          userName: user.username || user.email,
+          userName: username,
         });
 
-        if (!hasJoinedCall) {
-          setHasJoinedCall(true);
-        }
-
-        // When 'all-users' or 'user-connected' events fire,
-        // peers will be created (handled by socket event handlers)
+        setHasJoinedCall(true);
 
       })
       .catch((err) => {
@@ -181,25 +139,33 @@ const VideoCall = ({ workspaceId, user }) => {
       });
 
     return () => {
-      peersRef.current.forEach(({ peer }) => peer.destroy());
-      peersRef.current = [];
-      setPeers([]);
-
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
-      }
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach(track => track.stop());
-        screenStreamRef.current = null;
-      }
-
-      setCamEnabled(true);
-      setMicEnabled(true);
-      setScreenSharing(false);
-      setHasJoinedCall(false);
+      cleanupCall();
     };
-  }, [callActive, workspaceId, user, hasJoinedCall]);
+  }, [callActive, workspaceId, username]);
+
+  const cleanupCall = () => {
+    setCallInProgress(false);
+    setHasJoinedCall(false);
+    setCallActive(false);
+    setCallStartedBy(null);
+
+    peersRef.current.forEach(({ peer }) => peer.destroy());
+    peersRef.current = [];
+    setPeers([]);
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach(track => track.stop());
+      screenStreamRef.current = null;
+    }
+
+    setCamEnabled(true);
+    setMicEnabled(true);
+    setScreenSharing(false);
+  };
 
   const createPeer = (userToSignal, callerID, stream) => {
     const peer = new SimplePeer({
@@ -252,13 +218,11 @@ const VideoCall = ({ workspaceId, user }) => {
         screenStreamRef.current = screenStream;
         setScreenSharing(true);
 
-        // Replace video tracks sent by peers with the screen track
         peersRef.current.forEach(({ peer }) => {
           const sender = peer._pc.getSenders().find(s => s.track?.kind === 'video');
           if (sender) sender.replaceTrack(screenStream.getVideoTracks()[0]);
         });
 
-        // Show screen stream locally (audio from mic + screen video)
         if (userVideo.current) {
           const combinedStream = new MediaStream([
             ...streamRef.current.getAudioTracks(),
@@ -267,7 +231,6 @@ const VideoCall = ({ workspaceId, user }) => {
           userVideo.current.srcObject = combinedStream;
         }
 
-        // When screen sharing ends
         screenStream.getVideoTracks()[0].onended = () => {
           stopScreenSharing();
         };
@@ -304,12 +267,10 @@ const VideoCall = ({ workspaceId, user }) => {
   };
 
   const isFirstUser = () => {
-    // First user means only 1 member connected (self)
     return members.length === 1 && members[0].socketId === socketRef.current.id;
   };
 
   const canEndCall = () => {
-    // Any joined user can end call when in progress
     return hasJoinedCall && callInProgress;
   };
 
@@ -325,49 +286,49 @@ const VideoCall = ({ workspaceId, user }) => {
   // End call by any user joined
   const endCall = () => {
     socketRef.current.emit('videoCall:end', { workspaceId });
-    setCallActive(false);
-    setCallInProgress(false);
-    setHasJoinedCall(false);
-    setCallStartedBy(null);
-
-    peersRef.current.forEach(({ peer }) => peer.destroy());
-    peersRef.current = [];
-    setPeers([]);
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-    if (screenStreamRef.current) {
-      screenStreamRef.current.getTracks().forEach(track => track.stop());
-      screenStreamRef.current = null;
-    }
-
-    setCamEnabled(true);
-    setMicEnabled(true);
-    setScreenSharing(false);
+    cleanupCall();
   };
 
   return (
     <div className="flex flex-col w-full max-w-screen-xl mx-auto space-y-4 p-4">
-      {/* Buttons UI based on call state and user */}
-      {!callInProgress && !callActive && isFirstUser() ? (
-        // First user starts call
+      {!callInProgress && !callActive ? (
+        // Call not active - show start or join for everyone
         <div className="flex flex-col items-center justify-center w-full h-96 md:h-auto bg-white rounded-lg shadow p-10 text-center space-y-6">
-          <h2 className="text-4xl font-extrabold text-gray-700">Start Call</h2>
-          <p className="text-lg text-gray-600 max-w-md">
-            Click below to start a video call for this workspace.
-          </p>
-          <button
-            disabled={!socketConnected}
-            className="px-10 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed"
-            onClick={startCall}
-          >
-            Start Call
-          </button>
+          {isFirstUser() ? (
+            <>
+              <h2 className="text-4xl font-extrabold text-gray-700">Start Call</h2>
+              <p className="text-lg text-gray-600 max-w-md">
+                Click below to start a video call for this workspace.
+              </p>
+              <button
+                disabled={!socketConnected}
+                className="px-10 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={startCall}
+              >
+                Start Call
+              </button>
+            </>
+          ) : (
+            <>
+              <h2 className="text-4xl font-extrabold text-gray-700">Call Not Started</h2>
+              <p className="text-lg text-gray-600 max-w-md">
+                Waiting for someone to start the call.
+              </p>
+              <button
+                disabled={!socketConnected}
+                className="px-10 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={() => {
+                  setCallActive(true);
+                  setHasJoinedCall(true);
+                }}
+              >
+                Join Call
+              </button>
+            </>
+          )}
         </div>
-      ) : callInProgress && !hasJoinedCall ? (
-        // Call in progress, others can join
+      ) : !hasJoinedCall && callInProgress ? (
+        // Call active but user not joined yet
         <div className="flex flex-col items-center justify-center w-full h-96 md:h-auto bg-white rounded-lg shadow p-10 text-center space-y-6">
           <h2 className="text-4xl font-extrabold text-gray-700">Call in Progress</h2>
           <p className="text-lg text-gray-600 max-w-md">
@@ -384,16 +345,8 @@ const VideoCall = ({ workspaceId, user }) => {
             Join Call
           </button>
         </div>
-      ) : !callInProgress && !callActive && !isFirstUser() ? (
-        // No active call and user not first - wait
-        <div className="flex flex-col items-center justify-center w-full h-96 md:h-auto bg-white rounded-lg shadow p-10 text-center space-y-6">
-          <h2 className="text-4xl font-extrabold text-gray-700">No Active Call</h2>
-          <p className="text-lg text-gray-600 max-w-md">
-            Please wait for the call to start.
-          </p>
-        </div>
       ) : (
-        // Call is active and joined, show video call UI
+        // Call is active and joined, show video UI
         <div className="flex flex-col w-full rounded-lg shadow-lg bg-white p-4 space-y-4">
           <div className="flex flex-wrap justify-center space-x-4 space-y-4">
             {/* Local video */}
@@ -406,7 +359,7 @@ const VideoCall = ({ workspaceId, user }) => {
                 className="w-full h-full object-cover"
               />
               <div className="absolute bottom-1 left-1 bg-black bg-opacity-50 rounded px-2 py-1 text-white text-sm flex items-center space-x-2">
-                <span>{user.username || user.email || 'You'}</span>
+                <span>{username || 'You'}</span>
                 <FontAwesomeIcon
                   icon={camEnabled ? faVideo : faVideoSlash}
                   className={`ml-2 ${camEnabled ? 'text-green-400' : 'text-red-400'}`}
@@ -427,15 +380,15 @@ const VideoCall = ({ workspaceId, user }) => {
 
             {/* Remote peers */}
             {peers.map(({ peerID, peer }) => (
-              <Video key={peerID} peer={peer} members={members} />
+              <Video key={peerID} peer={peer} peerID={peerID} members={members} />
             ))}
           </div>
 
           {callStartedBy && (
-    <div className="text-sm text-gray-500 mt-2 text-center">
-      Call started by: {members.find(m => m.socketId === callStartedBy)?.userName || 'Unknown'}
-    </div>
-  )}
+            <div className="text-sm text-gray-500 mt-2 text-center">
+              Call started by: {members.find(m => m.socketId === callStartedBy)?.userName || 'Unknown'}
+            </div>
+          )}
 
           {/* Controls */}
           <div className="flex space-x-4 justify-center mt-4">
@@ -472,7 +425,8 @@ const VideoCall = ({ workspaceId, user }) => {
             {canEndCall() && (
               <button
                 onClick={endCall}
-                className="ml-auto bg-red-600 hover:bg-red-700 text-white rounded-lg px-6 py-3 font-semibold transition"
+                className="ml-auto px-4 py-2 rounded-md bg-red-600 hover:bg-red-700 text-white font-semibold"
+                title="End Call"
               >
                 End Call
               </button>
@@ -484,28 +438,23 @@ const VideoCall = ({ workspaceId, user }) => {
   );
 };
 
-// Separate Video component for remote peers
+// Video component for remote peer video
 const Video = ({ peer, members }) => {
   const ref = useRef();
 
   useEffect(() => {
     peer.on('stream', stream => {
-      if (ref.current) {
-        ref.current.srcObject = stream;
-      }
+      if (ref.current) ref.current.srcObject = stream;
     });
   }, [peer]);
 
-  // Find username by peerID (if you want)
-  // This depends on how you map peerID to members
-  // Here peerID = socketId of remote user
-  const userName = members.find(m => m.socketId === peer._id)?.userName || 'User';
+  const username = members.find(m => m.socketId === peer._id)?.userName || 'User';
 
   return (
     <div className="relative w-48 h-36 bg-black rounded-md overflow-hidden">
       <video ref={ref} autoPlay playsInline className="w-full h-full object-cover" />
       <div className="absolute bottom-1 left-1 bg-black bg-opacity-50 rounded px-2 py-1 text-white text-sm">
-        {userName}
+        {username}
       </div>
     </div>
   );
