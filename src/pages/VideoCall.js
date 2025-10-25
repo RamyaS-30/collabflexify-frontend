@@ -94,11 +94,15 @@ const VideoCall = ({ workspaceId, user }) => {
     });
 
     socketRef.current.on('signal', ({ from, signal }) => {
-      const item = peersRef.current.find(p => p.peerID === from);
-      if (item) {
-        item.peer.signal(signal);
-      }
-    });
+  const item = peersRef.current.find(p => p.peerID === from);
+  if (item && !item.peer.destroyed) {
+    try {
+      item.peer.signal(signal);
+    } catch (err) {
+      console.warn('Failed to signal peer', from, err);
+    }
+  }
+});
 
     socketRef.current.on('user-disconnected', (id) => {
       setMembers((prev) => prev.filter((m) => m.socketId !== id));
@@ -157,7 +161,9 @@ const VideoCall = ({ workspaceId, user }) => {
     setCallActive(false);
     setCallStartedBy(null);
 
-    peersRef.current.forEach(({ peer }) => peer.destroy());
+    peersRef.current.forEach(({ peer }) => {
+  if (!peer.destroyed) peer.destroy();
+});
     peersRef.current = [];
     setPeers([]);
 
@@ -227,9 +233,11 @@ const VideoCall = ({ workspaceId, user }) => {
         setScreenSharing(true);
 
         peersRef.current.forEach(({ peer }) => {
-          const sender = peer._pc.getSenders().find(s => s.track?.kind === 'video');
-          if (sender) sender.replaceTrack(screenStream.getVideoTracks()[0]);
-        });
+  if (!peer.destroyed && peer._pc) {
+    const sender = peer._pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) sender.replaceTrack(screenStreamRef.current.getVideoTracks()[0]);
+  }
+});
 
         if (userVideo.current) {
           const combinedStream = new MediaStream([
@@ -258,9 +266,11 @@ const VideoCall = ({ workspaceId, user }) => {
     const videoTrack = streamRef.current.getVideoTracks()[0];
 
     peersRef.current.forEach(({ peer }) => {
-      const sender = peer._pc.getSenders().find(s => s.track?.kind === 'video');
-      if (sender) sender.replaceTrack(videoTrack);
-    });
+  if (!peer.destroyed && peer._pc) {
+    const sender = peer._pc.getSenders().find(s => s.track?.kind === 'video');
+    if (sender) sender.replaceTrack(videoTrack);
+  }
+});
 
     if (screenStreamRef.current) {
       screenStreamRef.current.getTracks().forEach(track => track.stop());
