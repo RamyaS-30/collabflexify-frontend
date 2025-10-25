@@ -83,19 +83,13 @@ const VideoCall = ({ workspaceId, user }) => {
     });
 
     socketRef.current.on('user-connected', ({ socketId, userName }) => {
-  setMembers((prev) => [...prev, { socketId, userName }]);
-
-  // ✅ Only create peer if *this* client did NOT just join (i.e., existing users only)
-  if (hasJoinedCall && streamRef.current) {
-    // Prevent duplicate peers if already added
-    const alreadyExists = peersRef.current.some(p => p.peerID === socketId);
-    if (!alreadyExists) {
-      const peer = addPeer(socketId, streamRef.current);
-      peersRef.current.push({ peerID: socketId, peer });
-      setPeers((prevPeers) => [...prevPeers, { peerID: socketId, peer }]);
-    }
-  }
-});
+      setMembers((prev) => [...prev, { socketId, userName }]);
+      if (streamRef.current) {
+        const peer = addPeer(socketId, streamRef.current);
+        peersRef.current.push({ peerID: socketId, peer });
+        setPeers((prevPeers) => [...prevPeers, { peerID: socketId, peer }]);
+      }
+    });
 
     socketRef.current.on('signal', ({ from, signal }) => {
       const item = peersRef.current.find(p => p.peerID === from);
@@ -118,7 +112,7 @@ const VideoCall = ({ workspaceId, user }) => {
         socketRef.current.disconnect();
       }
     };
-  }, [workspaceId, username, user.id, user.userId, user.sub, hasJoinedCall]);
+  }, [workspaceId, username, user.id, user.userId, user.sub]);
 
   // --- Setup user media when call is active or user joins ---
   useEffect(() => {
