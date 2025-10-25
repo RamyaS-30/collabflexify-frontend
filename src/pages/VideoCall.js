@@ -32,6 +32,7 @@ const VideoCall = ({ workspaceId, user }) => {
   const [screenSharing, setScreenSharing] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
   const pendingUsersRef = useRef([]);
+  const pendingSignalsRef = useRef({});
 
   const username = user.username || user.email;
 
@@ -67,32 +68,52 @@ const VideoCall = ({ workspaceId, user }) => {
     });
 
     socketRef.current.on('all-users', (users) => {
-  // Remove self from users
   const otherUsers = users.filter(u => u.socketId !== socketRef.current.id);
 
   if (streamRef.current) {
-    // If we already have the stream, create peers immediately
     const peersArr = otherUsers.map(({ socketId }) => {
+      // Avoid duplicate peers
+      const existing = peersRef.current.find(p => p.peerID === socketId);
+      if (existing) return existing;
+
+      // Existing users initiate the connection
       const peer = createPeer(socketId, socketRef.current.id, streamRef.current);
       peersRef.current.push({ peerID: socketId, peer });
+
+      // Replay any pending signals
+      if (pendingSignalsRef.current[socketId]) {
+        pendingSignalsRef.current[socketId].forEach(sig => peer.signal(sig));
+        delete pendingSignalsRef.current[socketId];
+      }
+
       return { peerID: socketId, peer };
     });
-    setPeers(peersArr);
+    setPeers(prev => [...prev, ...peersArr]);
   } else {
-    // Queue the users until stream is ready
     pendingUsersRef.current = otherUsers;
   }
 });
 
     socketRef.current.on('user-connected', ({ socketId, userName }) => {
-      setMembers((prev) => [...prev, { socketId, userName }]);
-      if (streamRef.current) {
-        const peer = addPeer(socketId, streamRef.current);
-        peersRef.current.push({ peerID: socketId, peer });
-        setPeers((prevPeers) => [...prevPeers, { peerID: socketId, peer }]);
-      }
-    });
+  setMembers(prev => [...prev, { socketId, userName }]);
 
+  if (streamRef.current) {
+    const existing = peersRef.current.find(p => p.peerID === socketId);
+    if (!existing) {
+      // Joining users respond, initiator=false
+      const peer = addPeer(socketId, streamRef.current);
+      peersRef.current.push({ peerID: socketId, peer });
+
+      // Replay pending signals
+      if (pendingSignalsRef.current[socketId]) {
+        pendingSignalsRef.current[socketId].forEach(sig => peer.signal(sig));
+        delete pendingSignalsRef.current[socketId];
+      }
+
+      setPeers(prev => [...prev, { peerID: socketId, peer }]);
+    }
+  }
+});
     socketRef.current.on('signal', ({ from, signal }) => {
   const item = peersRef.current.find(p => p.peerID === from);
   if (item && !item.peer.destroyed) {
@@ -101,6 +122,10 @@ const VideoCall = ({ workspaceId, user }) => {
     } catch (err) {
       console.warn('Failed to signal peer', from, err);
     }
+  } else {
+    // Queue signal until peer exists
+    pendingSignalsRef.current[from] = pendingSignalsRef.current[from] || [];
+    pendingSignalsRef.current[from].push(signal);
   }
 });
 
@@ -138,7 +163,7 @@ const VideoCall = ({ workspaceId, user }) => {
           peersRef.current.push({ peerID: socketId, peer });
           return { peerID: socketId, peer };
         });
-        setPeers(peersArr);
+        setPeers(prev => [...prev, ...peersArr]);
         pendingUsersRef.current = [];
       }
 
@@ -461,10 +486,16 @@ const Video = ({ peer, peerID, members }) => {
   const ref = useRef();
 
   useEffect(() => {
-    peer.on('stream', stream => {
-      if (ref.current) ref.current.srcObject = stream;
-    });
-  }, [peer]);
+  const handleStream = (stream) => {
+    if (ref.current) ref.current.srcObject = stream;
+  };
+
+  peer.on('stream', handleStream);
+
+  return () => {
+    peer.off('stream', handleStream);
+  };
+}, [peer]);
 
   const username = members.find(m => m.socketId === peerID)?.userName || 'User';
 
