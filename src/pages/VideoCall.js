@@ -31,6 +31,7 @@ const VideoCall = ({ workspaceId, user }) => {
   const [micEnabled, setMicEnabled] = useState(true);
   const [screenSharing, setScreenSharing] = useState(false);
   const [socketConnected, setSocketConnected] = useState(false);
+  const pendingUsersRef = useRef([]);
 
   const username = user.username || user.email;
 
@@ -66,21 +67,22 @@ const VideoCall = ({ workspaceId, user }) => {
     });
 
     socketRef.current.on('all-users', (users) => {
-      // Update members (including self)
-      setMembers([{ socketId: socketRef.current.id, userName: username }, ...users]);
+  // Remove self from users
+  const otherUsers = users.filter(u => u.socketId !== socketRef.current.id);
 
-      // Create peers for existing users except self
-      if (streamRef.current) {
-        const peersArr = [];
-        users.forEach(({ socketId }) => {
-          if (socketId === socketRef.current.id) return;
-          const peer = createPeer(socketId, socketRef.current.id, streamRef.current);
-          peersRef.current.push({ peerID: socketId, peer });
-          peersArr.push({ peerID: socketId, peer });
-        });
-        setPeers(peersArr);
-      }
+  if (streamRef.current) {
+    // If we already have the stream, create peers immediately
+    const peersArr = otherUsers.map(({ socketId }) => {
+      const peer = createPeer(socketId, socketRef.current.id, streamRef.current);
+      peersRef.current.push({ peerID: socketId, peer });
+      return { peerID: socketId, peer };
     });
+    setPeers(peersArr);
+  } else {
+    // Queue the users until stream is ready
+    pendingUsersRef.current = otherUsers;
+  }
+});
 
     socketRef.current.on('user-connected', ({ socketId, userName }) => {
       setMembers((prev) => [...prev, { socketId, userName }]);
@@ -116,32 +118,38 @@ const VideoCall = ({ workspaceId, user }) => {
 
   // --- Setup user media when call is active or user joins ---
   useEffect(() => {
-    if (!callActive) return;
+  if (!callActive) return;
 
-    navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-      .then((stream) => {
-        streamRef.current = stream;
-        if (userVideo.current) userVideo.current.srcObject = stream;
+  navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+    .then((stream) => {
+      streamRef.current = stream;
+      if (userVideo.current) userVideo.current.srcObject = stream;
 
-        // Emit join room again to sync users and peers
-        socketRef.current.emit('joinRoom', {
-          roomId: workspaceId,
-          userName: username,
+      setHasJoinedCall(true);
+
+      // Process pending users
+      if (pendingUsersRef.current.length > 0) {
+        const peersArr = pendingUsersRef.current.map(({ socketId }) => {
+          const peer = createPeer(socketId, socketRef.current.id, streamRef.current);
+          peersRef.current.push({ peerID: socketId, peer });
+          return { peerID: socketId, peer };
         });
+        setPeers(peersArr);
+        pendingUsersRef.current = [];
+      }
 
-        setHasJoinedCall(true);
-
-      })
-      .catch((err) => {
-        console.error('❌ Error accessing media devices:', err);
-        alert('Could not access camera/microphone. Check your browser permissions.');
-        setCallActive(false);
+      // Re-emit joinRoom to make sure others know we joined
+      socketRef.current.emit('joinRoom', {
+        roomId: workspaceId,
+        userName: username,
       });
-
-    return () => {
-      cleanupCall();
-    };
-  }, [callActive, workspaceId, username]);
+    })
+    .catch((err) => {
+      console.error('❌ Error accessing media devices:', err);
+      alert('Could not access camera/microphone. Check your browser permissions.');
+      setCallActive(false);
+    });
+}, [callActive, workspaceId, username]);
 
   const cleanupCall = () => {
     setCallInProgress(false);
@@ -379,9 +387,7 @@ const VideoCall = ({ workspaceId, user }) => {
             </div>
 
             {/* Remote peers */}
-            {peers
-  .filter(({ peer }) => peer._remoteStreams && peer._remoteStreams.length > 0) // <-- only with stream
-  .map(({ peerID, peer }) => (
+            {peers.map(({ peerID, peer }) => (
     <Video key={peerID} peer={peer} peerID={peerID} members={members} />
   ))}
           </div>
