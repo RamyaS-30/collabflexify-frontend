@@ -13,7 +13,7 @@ import {
 const SOCKET_SERVER_URL = process.env.REACT_APP_BACKEND_URL;
 
 const VideoCall = ({ workspaceId, user }) => {
-  const [peers, setPeers] = useState([]);
+  const [peers, setPeers] = useState([]); // { peerID, peer, stream }
   const [members, setMembers] = useState([]);
   const socketRef = useRef();
   const userVideo = useRef();
@@ -61,14 +61,16 @@ const VideoCall = ({ workspaceId, user }) => {
     });
 
     socketRef.current.on('all-users', (users) => {
-      setMembers([{ socketId: socketRef.current.id, userName: username }, ...users]);
+      const updatedMembers = [{ socketId: socketRef.current.id, userName: username }, ...users];
+      setMembers(updatedMembers);
+
       if (streamRef.current) {
         const peersArr = [];
         users.forEach(({ socketId }) => {
           if (socketId === socketRef.current.id) return;
           const peer = createPeer(socketId, socketRef.current.id, streamRef.current);
           peersRef.current.push({ peerID: socketId, peer });
-          peersArr.push({ peerID: socketId, peer });
+          peersArr.push({ peerID: socketId, peer, stream: null });
         });
         setPeers(peersArr);
       }
@@ -79,7 +81,7 @@ const VideoCall = ({ workspaceId, user }) => {
       if (streamRef.current) {
         const peer = addPeer(socketId, streamRef.current);
         peersRef.current.push({ peerID: socketId, peer });
-        setPeers((prevPeers) => [...prevPeers, { peerID: socketId, peer }]);
+        setPeers((prevPeers) => [...prevPeers, { peerID: socketId, peer, stream: null }]);
       }
     });
 
@@ -144,34 +146,60 @@ const VideoCall = ({ workspaceId, user }) => {
 
   const createPeer = (userToSignal, callerID, stream) => {
     const peer = new SimplePeer({ initiator: true, trickle: false, stream });
+
     peer.on('signal', signal => {
       socketRef.current.emit('signal', { to: userToSignal, from: callerID, signal });
     });
+
+    peer.on('stream', remoteStream => {
+      const existing = peersRef.current.find(p => p.peerID === userToSignal);
+      if (existing) existing.stream = remoteStream;
+      setPeers([...peersRef.current]);
+    });
+
     return peer;
   };
 
   const addPeer = (incomingSignalId, stream) => {
     const peer = new SimplePeer({ initiator: false, trickle: false, stream });
+
     peer.on('signal', signal => {
       socketRef.current.emit('signal', { to: incomingSignalId, from: socketRef.current.id, signal });
     });
+
+    peer.on('stream', remoteStream => {
+      const existing = peersRef.current.find(p => p.peerID === incomingSignalId);
+      if (existing) existing.stream = remoteStream;
+      setPeers([...peersRef.current]);
+    });
+
     return peer;
   };
 
   const toggleCamera = () => {
     const videoTrack = streamRef.current?.getVideoTracks()?.[0];
-    if (videoTrack) {
-      videoTrack.enabled = !videoTrack.enabled;
-      setCamEnabled(videoTrack.enabled);
-    }
+    if (!videoTrack) return;
+
+    videoTrack.enabled = !videoTrack.enabled;
+    setCamEnabled(videoTrack.enabled);
+
+    peersRef.current.forEach(({ peer }) => {
+      const sender = peer._pc.getSenders().find(s => s.track?.kind === 'video');
+      if (sender) sender.replaceTrack(videoTrack);
+    });
   };
 
   const toggleMic = () => {
     const audioTrack = streamRef.current?.getAudioTracks()?.[0];
-    if (audioTrack) {
-      audioTrack.enabled = !audioTrack.enabled;
-      setMicEnabled(audioTrack.enabled);
-    }
+    if (!audioTrack) return;
+
+    audioTrack.enabled = !audioTrack.enabled;
+    setMicEnabled(audioTrack.enabled);
+
+    peersRef.current.forEach(({ peer }) => {
+      const sender = peer._pc.getSenders().find(s => s.track?.kind === 'audio');
+      if (sender) sender.replaceTrack(audioTrack);
+    });
   };
 
   const toggleScreenSharing = async () => {
@@ -254,68 +282,49 @@ const VideoCall = ({ workspaceId, user }) => {
               <p className="text-lg text-gray-600 max-w-md">Waiting for someone to start the call.</p>
               <button
                 disabled={!socketConnected}
-                className="px-10 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                onClick={() => setCallActive(true)}
+                className="px-10 py-4 bg-gray-400 text-white rounded-lg font-semibold cursor-not-allowed"
               >
-                Join Call
+                Waiting...
               </button>
             </>
           )}
         </div>
-      ) : !hasJoinedCall && callInProgress ? (
-        <div className="flex flex-col items-center justify-center w-full h-96 md:h-auto bg-white rounded-lg shadow p-10 text-center space-y-6">
-          <h2 className="text-4xl font-extrabold text-gray-700">Call in Progress</h2>
-          <p className="text-lg text-gray-600 max-w-md">A call is already in progress. Click below to join.</p>
-          <button
-            disabled={!socketConnected}
-            className="px-10 py-4 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-semibold shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 disabled:opacity-50 disabled:cursor-not-allowed"
-            onClick={() => setCallActive(true)}
-          >
-            Join Call
-          </button>
-        </div>
       ) : (
-        <div className="flex flex-col w-full rounded-lg shadow-lg bg-white p-4 space-y-4">
-          <div className="flex flex-wrap justify-center space-x-4 space-y-4">
-            <div className="relative w-48 h-36 bg-black rounded-md overflow-hidden">
-              <video ref={userVideo} autoPlay muted playsInline className="w-full h-full object-cover" />
-              <div className="absolute bottom-1 left-1 bg-black bg-opacity-50 rounded px-2 py-1 text-white text-sm flex items-center space-x-2">
-                <span>{username || 'You'}</span>
-                <FontAwesomeIcon icon={camEnabled ? faVideo : faVideoSlash} className={camEnabled ? 'text-green-400' : 'text-red-400'} />
-                <FontAwesomeIcon icon={micEnabled ? faMicrophone : faMicrophoneSlash} className={micEnabled ? 'text-green-400' : 'text-red-400'} />
-                {screenSharing && <FontAwesomeIcon icon={faDesktop} className="ml-2 text-blue-400" title="Screen Sharing" />}
-              </div>
+        <div className="flex flex-col w-full space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="bg-gray-900 rounded-lg overflow-hidden relative">
+              <video
+                ref={userVideo}
+                autoPlay
+                muted
+                playsInline
+                className="w-full h-60 md:h-72 lg:h-80 object-cover"
+              />
+              <div className="absolute bottom-2 left-2 text-white font-semibold">{username} (You)</div>
             </div>
 
-            {peers.map(({ peerID, peer }) => (
-              <Video key={peerID} peer={peer} peerID={peerID} members={members} />
+            {peers.map((peerObj) => (
+              <PeerVideo key={peerObj.peerID} peer={peerObj.peer} stream={peerObj.stream} />
             ))}
           </div>
 
-          {callStartedBy && (
-            <div className="text-sm text-gray-500 mt-2 text-center">
-              Call started by: {members.find(m => m.socketId === callStartedBy)?.userName || 'Unknown'}
-            </div>
-          )}
-
           <div className="flex space-x-4 justify-center mt-4">
-            <button onClick={toggleCamera} className={`px-4 py-2 rounded-md font-semibold ${camEnabled ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-400'} text-white`} title={camEnabled ? 'Turn off camera' : 'Turn on camera'}>
+            <button onClick={toggleCamera} className="p-3 bg-gray-700 text-white rounded-full">
               <FontAwesomeIcon icon={camEnabled ? faVideo : faVideoSlash} />
             </button>
-
-            <button onClick={toggleMic} className={`px-4 py-2 rounded-md font-semibold ${micEnabled ? 'bg-green-500 hover:bg-green-600' : 'bg-gray-400'} text-white`} title={micEnabled ? 'Mute microphone' : 'Unmute microphone'}>
+            <button onClick={toggleMic} className="p-3 bg-gray-700 text-white rounded-full">
               <FontAwesomeIcon icon={micEnabled ? faMicrophone : faMicrophoneSlash} />
             </button>
-
-            <button onClick={toggleScreenSharing} className={`px-4 py-2 rounded-md font-semibold ${screenSharing ? 'bg-blue-600 hover:bg-blue-700' : 'bg-gray-500 hover:bg-gray-600'} text-white`} title={screenSharing ? 'Stop screen sharing' : 'Start screen sharing'}>
+            <button onClick={toggleScreenSharing} className="p-3 bg-gray-700 text-white rounded-full">
               <FontAwesomeIcon icon={faDesktop} />
             </button>
-
-            {canEndCall() && (
-              <button onClick={endCall} className="ml-auto px-4 py-2 rounded-md bg-red-600 hover:bg-red-700 text-white font-semibold" title="End Call">
-                End Call
-              </button>
-            )}
+            <button
+              onClick={endCall}
+              className="p-3 bg-red-600 text-white rounded-full"
+              disabled={!canEndCall()}
+            >
+              End Call
+            </button>
           </div>
         </div>
       )}
@@ -323,21 +332,19 @@ const VideoCall = ({ workspaceId, user }) => {
   );
 };
 
-const Video = ({ peer, peerID, members }) => {
+// --- Peer Video Component ---
+const PeerVideo = ({ peer, stream }) => {
   const ref = useRef();
 
   useEffect(() => {
-    peer.on('stream', stream => {
-      if (ref.current) ref.current.srcObject = stream;
-    });
-  }, [peer]);
-
-  const username = members.find(m => m.socketId === peerID)?.userName || 'User';
+    if (stream && ref.current) {
+      ref.current.srcObject = stream;
+    }
+  }, [stream]);
 
   return (
-    <div className="relative w-48 h-36 bg-black rounded-md overflow-hidden">
-      <video ref={ref} autoPlay playsInline className="w-full h-full object-cover" />
-      <div className="absolute bottom-1 left-1 bg-black bg-opacity-50 rounded px-2 py-1 text-white text-sm">{username}</div>
+    <div className="bg-gray-900 rounded-lg overflow-hidden relative">
+      <video ref={ref} autoPlay playsInline className="w-full h-60 md:h-72 lg:h-80 object-cover" />
     </div>
   );
 };
