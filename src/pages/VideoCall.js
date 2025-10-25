@@ -83,19 +83,14 @@ const VideoCall = ({ workspaceId, user }) => {
     });
 
     socketRef.current.on('user-connected', ({ socketId, userName }) => {
-  setMembers((prev) => [...prev, { socketId, userName }]);
+      setMembers((prev) => [...prev, { socketId, userName }]);
+      if (streamRef.current) {
+        const peer = addPeer(socketId, streamRef.current);
+        peersRef.current.push({ peerID: socketId, peer });
+        setPeers((prevPeers) => [...prevPeers, { peerID: socketId, peer }]);
+      }
+    });
 
-  if (hasJoinedCall && streamRef.current) {
-    // Prevent duplicate peers if already added
-    const alreadyExists = peersRef.current.some(p => p.peerID === socketId);
-    if (!alreadyExists) {
-      const peer = addPeer(socketId, streamRef.current);
-      peersRef.current.push({ peerID: socketId, peer });
-      setPeers((prevPeers) => [...prevPeers, { peerID: socketId, peer }]);
-    }
-  }
-});
-    
     socketRef.current.on('signal', ({ from, signal }) => {
       const item = peersRef.current.find(p => p.peerID === from);
       if (item) {
