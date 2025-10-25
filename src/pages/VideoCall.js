@@ -85,6 +85,7 @@ const VideoCall = ({ workspaceId, user }) => {
     socketRef.current.on('user-connected', ({ socketId, userName }) => {
   setMembers((prev) => [...prev, { socketId, userName }]);
 
+  // ✅ Only create peer if *this* client did NOT just join (i.e., existing users only)
   if (hasJoinedCall && streamRef.current) {
     // Prevent duplicate peers if already added
     const alreadyExists = peersRef.current.some(p => p.peerID === socketId);
@@ -95,7 +96,7 @@ const VideoCall = ({ workspaceId, user }) => {
     }
   }
 });
-    
+
     socketRef.current.on('signal', ({ from, signal }) => {
       const item = peersRef.current.find(p => p.peerID === from);
       if (item) {
@@ -117,7 +118,7 @@ const VideoCall = ({ workspaceId, user }) => {
         socketRef.current.disconnect();
       }
     };
-  }, [workspaceId, username, user.id, user.userId, user.sub]);
+  }, [workspaceId, username, user.id, user.userId, user.sub, hasJoinedCall]);
 
   // --- Setup user media when call is active or user joins ---
   useEffect(() => {
