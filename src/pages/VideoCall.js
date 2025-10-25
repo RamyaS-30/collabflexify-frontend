@@ -379,9 +379,11 @@ const VideoCall = ({ workspaceId, user }) => {
             </div>
 
             {/* Remote peers */}
-            {peers.map(({ peerID, peer }) => (
-              <Video key={peerID} peer={peer} peerID={peerID} members={members} />
-            ))}
+            {peers
+  .filter(({ peer }) => peer._remoteStreams && peer._remoteStreams.length > 0) // <-- only with stream
+  .map(({ peerID, peer }) => (
+    <Video key={peerID} peer={peer} peerID={peerID} members={members} />
+  ))}
           </div>
 
           {callStartedBy && (
