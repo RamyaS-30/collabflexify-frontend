@@ -7,52 +7,59 @@ export default function Signup() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const navigate = useNavigate();
-  const { signUp } = useSignUp();
+  const { isLoaded, signUp, setActive } = useSignUp();
 
   const handleChange = (e) => {
     setForm({ ...form, [e.target.name]: e.target.value });
   };
 
   const handleSubmit = async (e) => {
-  e.preventDefault();
-  setError('');
-  setSuccess('');
+    e.preventDefault();
+    setError('');
+    setSuccess('');
 
-  try {
-    // 1️⃣ Create sign-up attempt
-    const createdSignUp = await signUp.create({
-      emailAddress: form.email,
-      password: form.password,
-      username: form.username,
-    });
+    if (!isLoaded) return;
 
-    const clerkUserId = createdSignUp.createdUserId;
-    const backendUrl = process.env.REACT_APP_BACKEND_URL;
-    // 3️⃣ Optional: Sync with your backend
-    await fetch(`${backendUrl}/api/create-user`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        clerkUserId,
+    try {
+      // 1️⃣ Create the user in Clerk
+      const createdSignUp = await signUp.create({
+        emailAddress: form.email,
+        password: form.password,
+        username: form.username,
+      });
+
+      // 2️⃣ Activate the session immediately (no verification)
+      await setActive({ session: createdSignUp.createdSessionId });
+
+      // 3️⃣ Optionally sync with your backend
+      const clerkUserId = createdSignUp.createdUserId;
+      const backendUrl = process.env.REACT_APP_BACKEND_URL;
+
+      await fetch(`${backendUrl}/api/create-user`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clerkUserId,
+          username: form.username,
+          email: form.email,
+        }),
+      });
+
+      // 4️⃣ Save locally and redirect
+      const userData = {
         username: form.username,
         email: form.email,
-      }),
-    });
+        id: clerkUserId,
+      };
+      localStorage.setItem('user', JSON.stringify(userData));
 
-    const userData = {
-      username: form.username,
-      email: form.email,
-      id: clerkUserId,
-    };
-    localStorage.setItem('user', JSON.stringify(userData));
-    
-    setSuccess('Signup successful! Redirecting...');
-    navigate('/dashboard');
-  } catch (err) {
-    console.error('Signup error:', err);
-    setError(err.errors?.[0]?.message || 'Signup failed.');
-  }
-};
+      setSuccess('Signup successful! Redirecting...');
+      navigate('/dashboard');
+    } catch (err) {
+      console.error('Signup error:', err);
+      setError(err.errors?.[0]?.message || 'Signup failed.');
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-200 to-blue-200 flex justify-items-center">
