@@ -284,7 +284,10 @@ export default function Dashboard() {
       const res = await fetch(`${API_BASE}/api/email/send-invite`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: email, inviteLink }),
+        body: JSON.stringify({
+          workspaceId: workspace._id,
+          inviteeEmail: email,
+        }),
       });
 
       if (res.ok) toast.success('Invitation sent!');
