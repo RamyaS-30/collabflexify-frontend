@@ -72,22 +72,14 @@ const VideoCall = ({ workspaceId, user }) => {
 
   if (streamRef.current) {
     const peersArr = otherUsers.map(({ socketId }) => {
-      // Avoid duplicate peers
-      const existing = peersRef.current.find(p => p.peerID === socketId);
-      if (existing) return existing;
+      const existingPeer = peersRef.current.find(p => p.peerID === socketId);
+      if (existingPeer) return null; // ✅ skip duplicate
 
-      // Existing users initiate the connection
       const peer = createPeer(socketId, socketRef.current.id, streamRef.current);
       peersRef.current.push({ peerID: socketId, peer });
 
-      // Replay any pending signals
-      if (pendingSignalsRef.current[socketId]) {
-        pendingSignalsRef.current[socketId].forEach(sig => peer.signal(sig));
-        delete pendingSignalsRef.current[socketId];
-      }
-
       return { peerID: socketId, peer };
-    });
+    }).filter(Boolean); // ✅ remove nulls
     setPeers(prev => [...prev, ...peersArr]);
   } else {
     pendingUsersRef.current = otherUsers;
@@ -484,10 +476,14 @@ const VideoCall = ({ workspaceId, user }) => {
 // Video component for remote peer video
 const Video = ({ peer, peerID, members }) => {
   const ref = useRef();
+  const [hasStream, setHasStream] = useState(false);
 
   useEffect(() => {
   const handleStream = (stream) => {
-    if (ref.current) ref.current.srcObject = stream;
+    if (ref.current) {
+        ref.current.srcObject = stream;
+        setHasStream(true);
+      }
   };
 
   peer.on('stream', handleStream);
@@ -496,6 +492,8 @@ const Video = ({ peer, peerID, members }) => {
     peer.off('stream', handleStream);
   };
 }, [peer]);
+
+if (!hasStream) return null;
 
   const username = members.find(m => m.socketId === peerID)?.userName || 'User';
 
