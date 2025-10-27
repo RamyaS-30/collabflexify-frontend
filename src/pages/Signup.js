@@ -54,7 +54,7 @@ export default function Signup() {
       localStorage.setItem('user', JSON.stringify(userData));
 
       setSuccess('Signup successful! Redirecting...');
-      navigate('/dashboard');
+      setTimeout(() => navigate('/dashboard'), 2000);
     } catch (err) {
       console.error('Signup error:', err);
       setError(err.errors?.[0]?.message || 'Signup failed.');
@@ -65,8 +65,18 @@ export default function Signup() {
     <div className="min-h-screen bg-gradient-to-br from-purple-200 to-blue-200 flex justify-items-center">
       <form onSubmit={handleSubmit} className="bg-white shadow-2xl m-auto p-8 rounded-lg max-w-md w-full">
         <h2 className="text-3xl font-bold text-gray-900 text-center mb-4">Signup</h2>
-        {error && <p className="text-red-600">{error}</p>}
-        {success && <p className="text-green-600">{success}</p>}
+  {success && (
+    <div className="bg-green-100 border border-green-400 text-green-700 px-4 py-3 rounded relative mb-4">
+      <strong className="font-bold">Success!</strong>
+      <span className="block sm:inline ml-1">{success}</span>
+    </div>
+  )}
+  {error && (
+    <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative mb-4">
+      <strong className="font-bold">Error:</strong>
+      <span className="block sm:inline ml-1">{error}</span>
+    </div>
+  )}
 
         <div className="mb-4">
           <label className="block text-md text-gray-700 mb-1">Username</label>
