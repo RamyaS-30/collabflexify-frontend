@@ -274,28 +274,34 @@ export default function Dashboard() {
   };
 
   const sendInvite = async () => {
-    const workspace = workspaces.find((ws) => ws._id === selectedWorkspaceId);
-    if (!workspace) return;
+  const workspace = workspaces.find((ws) => ws._id === selectedWorkspaceId);
+  if (!workspace) return;
 
-    const email = prompt('Enter user email to invite:');
-    if (!email) return;
+  const email = prompt('Enter user email to invite:');
+  if (!email) return;
 
-    try {
-      const res = await fetch(`${API_BASE}/api/email/send-invite`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workspaceId: workspace._id,
-          inviteeEmail: email,
-        }),
-      });
+  try {
+    const inviteLink = `${window.location.origin}/join/${workspace.inviteCode}`;
+    const res = await fetch(`${API_BASE}/api/email/send-invite`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        to: email,           // match backend
+        inviteLink,          // match backend
+      }),
+    });
 
-      if (res.ok) toast.success('Invitation sent!');
-      else toast.error('Failed to send invitation');
-    } catch (err) {
-      console.error('Error sending invite:', err);
+    if (res.ok) toast.success('Invitation sent!');
+    else {
+      const errText = await res.text();
+      console.error('Failed invite:', errText);
+      toast.error('Failed to send invitation');
     }
-  };
+  } catch (err) {
+    console.error('Error sending invite:', err);
+    toast.error('Failed to send invitation');
+  }
+};
 
   const renderTabContent = () => {
   switch (activeTab) {
