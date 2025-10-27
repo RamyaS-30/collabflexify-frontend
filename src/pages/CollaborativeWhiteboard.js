@@ -26,10 +26,23 @@ const CollaborativeWhiteboard = ({ workspaceId, userName }) => {
   const [color, setColor] = useState('#000000');
   const [brushSize, setBrushSize] = useState(2);
   const [isErasing, setIsErasing] = useState(false);
+  const [dimensions, setDimensions] = useState({ width: 800, height: 500 });
   const isDrawing = useRef(false);
   const stageRef = useRef(null);
   const socketRef = useRef();
   const saveTimeoutRef = useRef(null);
+
+  // Dynamically resize canvas based on screen size
+  useEffect(() => {
+    const updateSize = () => {
+      const width = Math.min(window.innerWidth * 0.9, 900);
+      const height = Math.min(window.innerHeight * 0.6, 600);
+      setDimensions({ width, height });
+    };
+    updateSize();
+    window.addEventListener('resize', updateSize);
+    return () => window.removeEventListener('resize', updateSize);
+  }, []);
 
   const saveLinesToBackend = useCallback(
     (linesToSave) => {
@@ -39,9 +52,7 @@ const CollaborativeWhiteboard = ({ workspaceId, userName }) => {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ lines: linesToSave }),
-        }).catch((err) => {
-          console.error('Failed to save whiteboard:', err);
-        });
+        }).catch((err) => console.error('Failed to save whiteboard:', err));
       }, 1000);
     },
     [workspaceId]
@@ -49,22 +60,14 @@ const CollaborativeWhiteboard = ({ workspaceId, userName }) => {
 
   useEffect(() => {
     socketRef.current = io(SOCKET_SERVER_URL);
-    socketRef.current.emit('joinRoom', {
-    roomId: workspaceId,
-    userName: userName,
-  });
-
+    socketRef.current.emit('joinRoom', { roomId: workspaceId, userName });
 
     fetch(`${SOCKET_SERVER_URL}/api/whiteboard/${workspaceId}`)
       .then((res) => res.json())
       .then((data) => {
-        if (data?.lines && Array.isArray(data.lines)) {
-          setLines(data.lines);
-        }
+        if (data?.lines && Array.isArray(data.lines)) setLines(data.lines);
       })
-      .catch((err) => {
-        console.error('Failed to load whiteboard:', err);
-      });
+      .catch((err) => console.error('Failed to load whiteboard:', err));
 
     const handleNewLine = (line) => setLines((prev) => [...prev, line]);
     const handleClear = () => setLines([]);
@@ -114,32 +117,22 @@ const CollaborativeWhiteboard = ({ workspaceId, userName }) => {
   const handleMouseMove = useCallback(
     (e) => {
       if (!isDrawing.current) return;
-
       const stage = e.target.getStage();
       const point = stage.getPointerPosition();
 
       setLines((prevLines) => {
         if (prevLines.length === 0) return prevLines;
-
         const lastLine = prevLines[prevLines.length - 1];
-        const updatedLine = {
-          ...lastLine,
-          points: lastLine.points.concat([point.x, point.y]),
-        };
-
+        const updatedLine = { ...lastLine, points: lastLine.points.concat([point.x, point.y]) };
         const updatedLines = [...prevLines.slice(0, -1), updatedLine];
         emitLineThrottled(updatedLine);
-
         return updatedLines;
       });
     },
     [emitLineThrottled]
   );
 
-  const handleMouseUp = useCallback(() => {
-    isDrawing.current = false;
-  }, []);
-
+  const handleMouseUp = useCallback(() => (isDrawing.current = false), []);
   const handleClear = useCallback(() => {
     setLines([]);
     socketRef.current.emit('whiteboard:clear', { workspaceId });
@@ -163,18 +156,31 @@ const CollaborativeWhiteboard = ({ workspaceId, userName }) => {
     document.body.removeChild(link);
   }, []);
 
-  const handleSaveNow = useCallback(() => {
-    saveLinesToBackend(lines);
-  }, [lines, saveLinesToBackend]);
+  const handleSaveNow = useCallback(() => saveLinesToBackend(lines), [lines, saveLinesToBackend]);
 
   return (
-    <div style={{ maxWidth: 960, margin: '20px auto', padding: 16 }}>
+    <div
+      style={{
+        maxWidth: 960,
+        margin: '0 auto',
+        padding: '16px',
+        boxSizing: 'border-box',
+      }}
+    >
       {/* Controls */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24, marginBottom: 24 }}>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 16,
+          justifyContent: 'center',
+          marginBottom: 16,
+        }}
+      >
         {/* Color Palette */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <label style={{ fontWeight: '700', fontSize: 16 }}>Color Palette</label>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+          <label style={{ fontWeight: '700', fontSize: 15 }}>Color</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'center' }}>
             {COLORS.map((c) => (
               <button
                 key={c}
@@ -184,11 +190,10 @@ const CollaborativeWhiteboard = ({ workspaceId, userName }) => {
                 }}
                 style={{
                   backgroundColor: c,
-                  width: 34,
-                  height: 34,
+                  width: 30,
+                  height: 30,
                   borderRadius: 6,
-                  border: c === color && !isErasing ? '3px solid #333' : '1px solid #ccc',
-                  cursor: 'pointer',
+                  border: c === color && !isErasing ? '2px solid #333' : '1px solid #ccc',
                 }}
               />
             ))}
@@ -202,53 +207,46 @@ const CollaborativeWhiteboard = ({ workspaceId, userName }) => {
               style={{
                 width: 34,
                 height: 34,
-                padding: 0,
                 borderRadius: 6,
                 border: '1px solid #ccc',
-                cursor: 'pointer',
               }}
-              title="Pick custom color"
+              title="Pick color"
             />
           </div>
         </div>
 
-        {/* Brush Size */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <label style={{ fontWeight: '700' }}>Brush Size</label>
+        {/* Brush size */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+          <label style={{ fontWeight: '700' }}>Brush</label>
           <input
             type="range"
             min="1"
             max="20"
             value={brushSize}
             onChange={(e) => setBrushSize(Number(e.target.value))}
-            style={{ cursor: 'pointer' }}
+            style={{ width: 100 }}
           />
         </div>
 
-        {/* Action Buttons */}
-        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <button
-            onClick={handleUndo}
-            style={{ ...buttonStyle, backgroundColor: '#d69e2e', color: 'white' }}
-          >
+        {/* Buttons */}
+        <div
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: 8,
+            justifyContent: 'center',
+          }}
+        >
+          <button onClick={handleUndo} style={{ ...buttonStyle, backgroundColor: '#d69e2e', color: 'white' }}>
             Undo
           </button>
-          <button
-            onClick={handleClear}
-            style={{ ...buttonStyle, backgroundColor: '#e53e3e', color: 'white' }}
-          >
+          <button onClick={handleClear} style={{ ...buttonStyle, backgroundColor: '#e53e3e', color: 'white' }}>
             Clear
           </button>
-          <button
-            onClick={handleExport}
-            style={{ ...buttonStyle, backgroundColor: '#38a169', color: 'white' }}
-          >
+          <button onClick={handleExport} style={{ ...buttonStyle, backgroundColor: '#38a169', color: 'white' }}>
             Export
           </button>
-          <button
-            onClick={handleSaveNow}
-            style={{ ...buttonStyle, backgroundColor: '#3182ce', color: 'white' }}
-          >
+          <button onClick={handleSaveNow} style={{ ...buttonStyle, backgroundColor: '#3182ce', color: 'white' }}>
             Save
           </button>
           <button
@@ -265,30 +263,37 @@ const CollaborativeWhiteboard = ({ workspaceId, userName }) => {
       </div>
 
       {/* Canvas */}
-      <Stage
-        width={window.innerWidth * 0.8}
-        height={window.innerHeight * 0.6}
-        onMouseDown={handleMouseDown}
-        onMousemove={handleMouseMove}
-        onMouseup={handleMouseUp}
-        ref={stageRef}
-        style={{ border: '1px solid #ccc', background: 'white', borderRadius: 8 }}
-      >
-        <Layer>
-          {lines.map((line) => (
-            <Line
-              key={line.id}
-              points={line.points}
-              stroke={line.stroke}
-              strokeWidth={line.strokeWidth}
-              lineCap={line.lineCap}
-              lineJoin={line.lineJoin}
-              tension={0.5}
-              globalCompositeOperation={line.globalCompositeOperation || 'source-over'}
-            />
-          ))}
-        </Layer>
-      </Stage>
+      <div style={{ width: '100%', overflow: 'hidden' }}>
+        <Stage
+          width={dimensions.width}
+          height={dimensions.height}
+          onMouseDown={handleMouseDown}
+          onMousemove={handleMouseMove}
+          onMouseup={handleMouseUp}
+          ref={stageRef}
+          style={{
+            width: '100%',
+            border: '1px solid #ccc',
+            background: 'white',
+            borderRadius: 8,
+          }}
+        >
+          <Layer>
+            {lines.map((line) => (
+              <Line
+                key={line.id}
+                points={line.points}
+                stroke={line.stroke}
+                strokeWidth={line.strokeWidth}
+                lineCap={line.lineCap}
+                lineJoin={line.lineJoin}
+                tension={0.5}
+                globalCompositeOperation={line.globalCompositeOperation || 'source-over'}
+              />
+            ))}
+          </Layer>
+        </Stage>
+      </div>
     </div>
   );
 };
