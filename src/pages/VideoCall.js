@@ -71,16 +71,14 @@ const VideoCall = ({ workspaceId, user }) => {
   const otherUsers = users.filter(u => u.socketId !== socketRef.current.id);
 
   if (streamRef.current) {
-    const peersArr = otherUsers.map(({ socketId }) => {
-      const existingPeer = peersRef.current.find(p => p.peerID === socketId);
-      if (existingPeer) return null; 
-
-      const peer = createPeer(socketId, socketRef.current.id, streamRef.current);
-      peersRef.current.push({ peerID: socketId, peer });
-
-      return { peerID: socketId, peer };
-    }).filter(Boolean); // ✅ remove nulls
-    setPeers(prev => [...prev, ...peersArr]);
+    const newPeers = otherUsers
+      .filter(u => !peersRef.current.some(p => p.peerID === u.socketId))
+      .map(({ socketId }) => {
+        const peer = createPeer(socketId, socketRef.current.id, streamRef.current);
+        peersRef.current.push({ peerID: socketId, peer });
+        return { peerID: socketId, peer };
+      });
+    setPeers(prev => [...prev, ...newPeers]);
   } else {
     pendingUsersRef.current = otherUsers;
   }
@@ -150,14 +148,16 @@ const VideoCall = ({ workspaceId, user }) => {
 
       // Process pending users
       if (pendingUsersRef.current.length > 0) {
-        const peersArr = pendingUsersRef.current.map(({ socketId }) => {
-          const peer = createPeer(socketId, socketRef.current.id, streamRef.current);
-          peersRef.current.push({ peerID: socketId, peer });
-          return { peerID: socketId, peer };
-        });
-        setPeers(prev => [...prev, ...peersArr]);
-        pendingUsersRef.current = [];
-      }
+  const newPeers = pendingUsersRef.current
+    .filter(u => !peersRef.current.some(p => p.peerID === u.socketId))
+    .map(({ socketId }) => {
+      const peer = createPeer(socketId, socketRef.current.id, streamRef.current);
+      peersRef.current.push({ peerID: socketId, peer });
+      return { peerID: socketId, peer };
+    });
+  setPeers(prev => [...prev, ...newPeers]);
+  pendingUsersRef.current = [];
+}
 
       // Re-emit joinRoom to make sure others know we joined
       socketRef.current.emit('joinRoom', {
